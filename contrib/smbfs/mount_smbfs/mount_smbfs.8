@@ -15,6 +15,7 @@
 .Op Fl O Ar cowner : Ns Ar cgroup Ns / Ns Ar sowner : Ns Ar sgroup
 .Op Fl R Ar retrycount
 .Op Fl T Ar timeout
+.Op Fl U Ar username
 .Op Fl W Ar workgroup
 .Op Fl c Ar case
 .Op Fl d Ar mode
@@ -23,7 +24,9 @@
 .Op Fl n Ar opt
 .Op Fl u Ar uid
 .Sm off
-.No // Ar user No @ Ar server No / Ar share
+.No // Ar user No @ Ar server
+.Op Ar :port1 Op Ar :port2
+.No / Ar share
 .Sm on
 .Ar node
 .Sh DESCRIPTION
@@ -55,9 +58,6 @@ tries to use an environment variable
 to determine it.
 .It Fl M Ar crights : Ns Ar srights
 Assign access rights to the newly created connection.
-See
-.Xr nsmb 8
-for theory.
 .It Fl N
 Do not ask for a password.
 At run time,
@@ -70,14 +70,15 @@ If no password is found,
 prompts for it.
 .It Fl O Ar cowner : Ns Ar cgroup Ns / Ns Ar sowner : Ns Ar sgroup
 Assign owner/group attributes to the newly created connection.
-See
-.Xr nsmb 8
-for theory.
 .It Fl R Ar retrycount
 How many retries should be done before the SMB requester decides to drop
 the connection.
+Default is 4.
 .It Fl T Ar timeout
 Timeout in seconds for each request.
+Default is 15.
+.It Fl U Ar username
+Username to authenticate with.
 .It Fl W Ar workgroup
 This option specifies the workgroup to be used in the authentication request.
 .It Fl c Ar case
@@ -109,7 +110,7 @@ server.
 User ID and group ID assigned to files.
 The default are owner and group IDs from
 the directory where the volume is mounted.
-.It No // Ns Ar user Ns @ Ns Ar server Ns / Ns Ar share
+.It No // Ns Ar user Ns @ Ns Ar server Ns Oo Ar :port1 Ns Oo Ar :port2 Oc Oc Ns No / Ns Ar share
 The
 .Nm
 command will use
@@ -119,6 +120,17 @@ as the NetBIOS name of remote computer,
 as the remote user name and
 .Ar share
 as the resource name on a remote server.
+Optional
+.Ar port1
+and
+.Ar port2
+arguments can be used to override default values of port numbers used
+by communication protocols.
+For SMB over NetBIOS default value for
+.Ar port1
+are 139, and
+.Ar port2
+are 137.
 .It Ar node
 Path to mount point.
 .El
@@ -127,7 +139,7 @@ Path to mount point.
 .It Pa ~/.nsmbrc
 Keeps static parameters for connections and other information.
 See
-.Pa ./examples/dot.nsmbrc
+.Pa /usr/share/examples/smbfs/dot.nsmbrc
 for details.
 .El
 .Sh EXAMPLES
@@ -144,13 +156,11 @@ mount_smbfs -I samba.mydomain.com //guest@samba/public /smb/public
 mount_smbfs -I 192.168.20.3 -E koi8-r:cp866 //guest@samba/tmp /smb/tmp
 .Ed
 .Pp
-It is possible to use
+It is also possible to use
 .Xr fstab 5
-for smbfs mounts:
+for smbfs mounts (the example below doesn't prompt for a password):
 .Pp
-.Dl "//guest@samba/public    /smb/public     smbfs  rw,noauto 0   0"
-.Sh BUGS
-Please report bugs to the author.
+.Dl "//guest@samba/public    /smb/public     smbfs  rw,noauto,-N 0   0"
 .Sh AUTHORS
 .An Boris Popov Aq bp@butya.kz ,
 .Aq bp@FreeBSD.org

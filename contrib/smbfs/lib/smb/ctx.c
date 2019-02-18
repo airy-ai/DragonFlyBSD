@@ -76,6 +76,7 @@ smb_ctx_init(struct smb_ctx *ctx, int argc, char *argv[],
 	ctx->ct_parsedlevel = SMBL_NONE;
 	ctx->ct_minlevel = minlevel;
 	ctx->ct_maxlevel = maxlevel;
+	ctx->ct_smbtcpport = SMB_TCP_PORT;
 
 	ctx->ct_ssn.ioc_opt = SMBVOPT_CREATE;
 	ctx->ct_ssn.ioc_timeout = 15;
@@ -123,7 +124,7 @@ smb_ctx_init(struct smb_ctx *ctx, int argc, char *argv[],
 				return error;
 			break;
 		    case 'L':
-			error = nls_setlocale(optarg);
+			error = nls_setlocale(arg);
 			if (error)
 				break;
 			break;
@@ -166,14 +167,14 @@ getsubstring(const char *p, u_char sep, char *dest, int maxlen, const char **nex
 }
 
 /*
- * Here we expect something like "[proto:]//[user@]host[/share][/path]"
+ * Here we expect something like "[proto:]//[user@]host[:psmb[:pnb]][/share][/path]"
  */
 int
 smb_ctx_parseunc(struct smb_ctx *ctx, const char *unc, int sharetype,
 	const char **next)
 {
 	const char *p = unc;
-	char *p1;
+	char *p1, *psmb, *pnb;
 	char tmp[1024];
 	int error ;
 
@@ -187,10 +188,6 @@ smb_ctx_parseunc(struct smb_ctx *ctx, const char *unc, int sharetype,
 	if (!error) {
 		if (ctx->ct_maxlevel < SMBL_VC) {
 			smb_error("no user name required", 0);
-			return EINVAL;
-		}
-		if (*p1 == 0) {
-			smb_error("empty user name", 0);
 			return EINVAL;
 		}
 		error = smb_ctx_setuser(ctx, tmp);
@@ -209,6 +206,27 @@ smb_ctx_parseunc(struct smb_ctx *ctx, const char *unc, int sharetype,
 	if (*p1 == 0) {
 		smb_error("empty server name", 0);
 		return EINVAL;
+	}
+	/*
+	 * Check for port number specification.
+	 */
+	psmb = strchr(tmp, ':');
+	if (psmb) {
+		*psmb++ = '\0';
+		pnb = strchr(psmb, ':');
+		if (pnb) {
+			*pnb++ = '\0';
+			error = smb_ctx_setnbport(ctx, atoi(pnb));
+			if (error) {
+				smb_error("Invalid NetBIOS port number", 0);
+				return error;
+			}
+		}
+		error = smb_ctx_setsmbport(ctx, atoi(psmb));
+		if (error) {
+			smb_error("Invalid SMB port number", 0);
+			return error;
+		}
 	}
 	error = smb_ctx_setserver(ctx, tmp);
 	if (error)
@@ -274,7 +292,7 @@ smb_ctx_setcharset(struct smb_ctx *ctx, const char *arg)
 int
 smb_ctx_setserver(struct smb_ctx *ctx, const char *name)
 {
-	if (strlen(name) >= SMB_MAXSRVNAMELEN) {
+	if (strlen(name) > SMB_MAXSRVNAMELEN) {
 		smb_error("server name '%s' too long", 0, name);
 		return ENAMETOOLONG;
 	}
@@ -283,9 +301,28 @@ smb_ctx_setserver(struct smb_ctx *ctx, const char *name)
 }
 
 int
+smb_ctx_setnbport(struct smb_ctx *ctx, int port)
+{
+	if (port < 1 || port > 0xffff)
+		return EINVAL;
+	ctx->ct_nb->nb_nmbtcpport = port;
+	return 0;
+}
+
+int
+smb_ctx_setsmbport(struct smb_ctx *ctx, int port)
+{
+	if (port < 1 || port > 0xffff)
+		return EINVAL;
+	ctx->ct_smbtcpport = port;
+	ctx->ct_nb->nb_smbtcpport = port;
+	return 0;
+}
+
+int
 smb_ctx_setuser(struct smb_ctx *ctx, const char *name)
 {
-	if (strlen(name) >= SMB_MAXUSERNAMELEN) {
+	if (strlen(name) > SMB_MAXUSERNAMELEN) {
 		smb_error("user name '%s' too long", 0, name);
 		return ENAMETOOLONG;
 	}
@@ -296,7 +333,7 @@ smb_ctx_setuser(struct smb_ctx *ctx, const char *name)
 int
 smb_ctx_setworkgroup(struct smb_ctx *ctx, const char *name)
 {
-	if (strlen(name) >= SMB_MAXUSERNAMELEN) {
+	if (strlen(name) > SMB_MAXUSERNAMELEN) {
 		smb_error("workgroup name '%s' too long", 0, name);
 		return ENAMETOOLONG;
 	}
@@ -309,7 +346,7 @@ smb_ctx_setpassword(struct smb_ctx *ctx, const char *passwd)
 {
 	if (passwd == NULL)
 		return EINVAL;
-	if (strlen(passwd) >= SMB_MAXPASSWORDLEN) {
+	if (strlen(passwd) > SMB_MAXPASSWORDLEN) {
 		smb_error("password too long", 0);
 		return ENAMETOOLONG;
 	}
@@ -324,7 +361,7 @@ smb_ctx_setpassword(struct smb_ctx *ctx, const char *passwd)
 int
 smb_ctx_setshare(struct smb_ctx *ctx, const char *share, int stype)
 {
-	if (strlen(share) >= SMB_MAXSHARENAMELEN) {
+	if (strlen(share) > SMB_MAXSHARENAMELEN) {
 		smb_error("share name '%s' too long", 0, share);
 		return ENAMETOOLONG;
 	}
@@ -408,7 +445,7 @@ smb_ctx_opt(struct smb_ctx *ctx, int opt, const char *arg)
 			    &ctx->ct_sh.ioc_group);
 		}
 		if (*p && error == 0) {
-			error = smb_parse_owner(cp, &ctx->ct_ssn.ioc_owner,
+			error = smb_parse_owner(p, &ctx->ct_ssn.ioc_owner,
 			    &ctx->ct_ssn.ioc_group);
 		}
 		free(p);
@@ -472,18 +509,11 @@ smb_ctx_resolve(struct smb_ctx *ctx)
 	struct sockaddr *sap;
 	struct sockaddr_nb *salocal, *saserver;
 	char *cp;
-	u_char cstbl[256];
-	u_int i;
 	int error = 0;
 	
 	ctx->ct_flags &= ~SMBCF_RESOLVED;
 	if (ssn->ioc_srvname[0] == 0) {
 		smb_error("no server name specified", 0);
-		return EINVAL;
-	}
-	if (ssn->ioc_user[0] == 0) {
-		smb_error("no user name specified for server %s",
-		    0, ssn->ioc_srvname);
 		return EINVAL;
 	}
 	if (ctx->ct_minlevel >= SMBL_SHARE && sh->ioc_share[0] == 0) {
@@ -503,21 +533,12 @@ smb_ctx_resolve(struct smb_ctx *ctx)
 	if (error)
 		return error;
 	if (ssn->ioc_servercs[0] != 0) {
-		for(i = 0; i < sizeof(cstbl); i++)
-			cstbl[i] = i;
-		nls_mem_toext(cstbl, cstbl, sizeof(cstbl));
-		error = smb_addiconvtbl(ssn->ioc_servercs, ssn->ioc_localcs, cstbl);
-		if (error)
-			return error;
-		for(i = 0; i < sizeof(cstbl); i++)
-			cstbl[i] = i;
-		nls_mem_toloc(cstbl, cstbl, sizeof(cstbl));
-		error = smb_addiconvtbl(ssn->ioc_localcs, ssn->ioc_servercs, cstbl);
-		if (error)
-			return error;
+		error = kiconv_add_xlat16_cspairs
+			(ssn->ioc_servercs, ssn->ioc_localcs);
+		if (error) return error;
 	}
 	if (ctx->ct_srvaddr) {
-		error = nb_resolvehost_in(ctx->ct_srvaddr, &sap);
+		error = nb_resolvehost_in(ctx->ct_srvaddr, &sap, ctx->ct_smbtcpport);
 	} else {
 		error = nbns_resolvename(ssn->ioc_srvname, ctx->ct_nb, &sap);
 	}
@@ -527,7 +548,9 @@ smb_ctx_resolve(struct smb_ctx *ctx)
 	}
 	nn.nn_scope = ctx->ct_nb->nb_scope;
 	nn.nn_type = NBT_SERVER;
-	strcpy(nn.nn_name, ssn->ioc_srvname);
+	if (strlen(ssn->ioc_srvname) > NB_NAMELEN)
+		return NBERROR(NBERR_NAMETOOLONG);
+	strlcpy(nn.nn_name, ssn->ioc_srvname, sizeof(nn.nn_name));
 	error = nb_sockaddr(sap, &nn, &saserver);
 	nb_snbfree(sap);
 	if (error) {
@@ -543,7 +566,11 @@ smb_ctx_resolve(struct smb_ctx *ctx)
 		}
 		nls_str_upper(ctx->ct_locname, ctx->ct_locname);
 	}
-	strcpy(nn.nn_name, ctx->ct_locname);
+	/*
+	 * Truncate the local host name to NB_NAMELEN-1 which gives a
+	 * suffix of 0 which is "workstation name".
+	 */
+	strlcpy(nn.nn_name, ctx->ct_locname, NB_NAMELEN);
 	nn.nn_type = NBT_WKSTA;
 	nn.nn_scope = ctx->ct_nb->nb_scope;
 	error = nb_sockaddr(NULL, &nn, &salocal);
@@ -571,40 +598,12 @@ smb_ctx_gethandle(struct smb_ctx *ctx)
 	int fd, i;
 	char buf[20];
 
-	/*
-	 * First, try to open as cloned device
-	 */
 	fd = open("/dev/"NSMB_NAME, O_RDWR);
 	if (fd >= 0) {
 		ctx->ct_fd = fd;
 		return 0;
 	}
-	/*
-	 * well, no clone capabilities available - we have to scan
-	 * all devices in order to get free one
-	 */
-	 for (i = 0; i < 1024; i++) {
-	         snprintf(buf, sizeof(buf), "/dev/%s%d", NSMB_NAME, i);
-		 fd = open(buf, O_RDWR);
-		 if (fd >= 0) {
-			ctx->ct_fd = fd;
-			return 0;
-		 }
-	 }
-	 /*
-	  * This is a compatibility with old /dev/net/nsmb device
-	  */
-	 for (i = 0; i < 1024; i++) {
-	         snprintf(buf, sizeof(buf), "/dev/net/%s%d", NSMB_NAME, i);
-		 fd = open(buf, O_RDWR);
-		 if (fd >= 0) {
-			ctx->ct_fd = fd;
-			return 0;
-		 }
-		 if (errno == ENOENT)
-		         return ENOENT;
-	 }
-	 return ENOENT;
+	return ENOENT;
 }
 
 int

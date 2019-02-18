@@ -79,20 +79,16 @@
 #define setdbe(buf,ofs,val) getdle(buf,ofs)=htonl(val)
 
 #else	/* (BYTE_ORDER == LITTLE_ENDIAN) */
-#error "Macros for Big-Endians are incomplete"
-#define getwle(buf,ofs) ((u_int16_t)(getb(buf, ofs) | (getb(buf, ofs + 1) << 8)))
-#define getdle(buf,ofs) ((u_int32_t)(getb(buf, ofs) | \
-				    (getb(buf, ofs + 1) << 8) | \
-				    (getb(buf, ofs + 2) << 16) | \
-				    (getb(buf, ofs + 3) << 24)))
-#define getwbe(buf,ofs) (*((u_int16_t*)(&((u_int8_t*)(buf))[ofs])))
-#define getdbe(buf,ofs) (*((u_int32_t*)(&((u_int8_t*)(buf))[ofs])))
-/*
-#define setwle(buf,ofs,val) getwle(buf,ofs)=val
-#define setdle(buf,ofs,val) getdle(buf,ofs)=val
-*/
-#define setwbe(buf,ofs,val) getwle(buf,ofs)=val
-#define setdbe(buf,ofs,val) getdle(buf,ofs)=val
+
+#define getwbe(buf,ofs)	(*((u_int16_t*)(&((u_int8_t*)(buf))[ofs])))
+#define getdbe(buf,ofs)	(*((u_int32_t*)(&((u_int8_t*)(buf))[ofs])))
+#define getwle(buf,ofs)	(bswap16(getwbe(buf,ofs)))
+#define getdle(buf,ofs)	(bswap32(getdbe(buf,ofs)))
+
+#define setwbe(buf,ofs,val) getwbe(buf,ofs)=val
+#define setwle(buf,ofs,val) getwbe(buf,ofs)=bswap16(val)
+#define setdbe(buf,ofs,val) getdbe(buf,ofs)=val
+#define setdle(buf,ofs,val) getdbe(buf,ofs)=bswap32(val)
 
 #endif	/* (BYTE_ORDER == LITTLE_ENDIAN) */
 
@@ -112,6 +108,7 @@ struct smb_ctx {
 	struct nb_ctx *	ct_nb;
 	struct smbioc_ossn	ct_ssn;
 	struct smbioc_oshare	ct_sh;
+	long		ct_smbtcpport;
 };
 
 #define	SMBCF_NOPWD		0x0001	/* don't ask for a password */
@@ -178,6 +175,8 @@ void smb_ctx_done(struct smb_ctx *);
 int  smb_ctx_parseunc(struct smb_ctx *, const char *, int, const char **);
 int  smb_ctx_setcharset(struct smb_ctx *, const char *);
 int  smb_ctx_setserver(struct smb_ctx *, const char *);
+int  smb_ctx_setnbport(struct smb_ctx *, int);
+int  smb_ctx_setsmbport(struct smb_ctx *, int);
 int  smb_ctx_setuser(struct smb_ctx *, const char *);
 int  smb_ctx_setshare(struct smb_ctx *, const char *, int);
 int  smb_ctx_setscope(struct smb_ctx *, const char *);

@@ -34,6 +34,7 @@
  * This is very simple implementation of RAP protocol.
  */
 #include <sys/param.h>
+#include <sys/endian.h>
 #include <sys/errno.h>
 #include <sys/stat.h>
 #include <ctype.h>
@@ -41,11 +42,8 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <string.h>
-#include <strings.h>
 #include <stdlib.h>
 #include <sysexits.h>
-
-#include <sys/endian.h>
 
 #include <netsmb/smb_lib.h>
 #include <netsmb/smb_conn.h>

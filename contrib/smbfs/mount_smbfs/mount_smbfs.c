@@ -34,6 +34,7 @@
 #include <sys/param.h>
 #include <sys/stat.h>
 #include <sys/errno.h>
+#include <sys/linker.h>
 #include <sys/mount.h>
 
 #include <stdio.h>
@@ -64,22 +65,36 @@ static struct mntopt mopts[] = {
 	MOPT_NULL
 };
 
+static char smbfs_vfsname[] = "smbfs";
 
 int
 main(int argc, char *argv[])
 {
+	struct iovec *iov;
+	unsigned int iovlen;
 	struct smb_ctx sctx, *ctx = &sctx;
-	struct smbfs_args mdata;
 	struct stat st;
 #ifdef APPLE
 	extern void dropsuid();
 	extern int loadsmbvfs();
 #else
-	struct vfsconf vfc;
-#endif /* APPLE */
-	char *next;
-	int opt, error, mntflags, caseopt;
+	struct xvfsconf vfc;
+#endif
+	char *next, *p, *val;
+	int opt, error, mntflags, caseopt, fd;
+	uid_t uid;
+	gid_t gid;
+	mode_t dir_mode, file_mode;
+	char errmsg[255] = { 0 };
 
+	iov = NULL;
+	iovlen = 0;
+	fd = 0;
+	uid = (uid_t)-1;
+	gid = (gid_t)-1;
+	caseopt = 0;
+	file_mode = 0;
+	dir_mode = 0;
 
 #ifdef APPLE
 	dropsuid();
@@ -87,10 +102,6 @@ main(int argc, char *argv[])
 	if (argc == 2) {
 		if (strcmp(argv[1], "-h") == 0) {
 			usage();
-		} else if (strcmp(argv[1], "-v") == 0) {
-			errx(EX_OK, "version %d.%d.%d", SMBFS_VERSION / 100000,
-			    (SMBFS_VERSION % 10000) / 1000,
-			    (SMBFS_VERSION % 1000) / 100);
 		}
 	}
 	if (argc < 3)
@@ -99,12 +110,11 @@ main(int argc, char *argv[])
 #ifdef APPLE
 	error = loadsmbvfs();
 #else
-	error = getvfsbyname(SMBFS_VFSNAME, &vfc);
-	if (error && vfsisloadable(SMBFS_VFSNAME)) {
-		if(vfsload(SMBFS_VFSNAME))
-			err(EX_OSERR, "vfsload("SMBFS_VFSNAME")");
-		endvfsent();
-		error = getvfsbyname(SMBFS_VFSNAME, &vfc);
+	error = getvfsbyname(smbfs_vfsname, &vfc);
+	if (error) {
+		if (kldload(smbfs_vfsname) < 0)
+			err(EX_OSERR, "kldload(%s)", smbfs_vfsname);
+		error = getvfsbyname(smbfs_vfsname, &vfc);
 	}
 #endif /* APPLE */
 	if (error)
@@ -114,8 +124,7 @@ main(int argc, char *argv[])
 		exit(1);
 
 	mntflags = error = 0;
-	bzero(&mdata, sizeof(mdata));
-	mdata.uid = mdata.gid = -1;
+
 	caseopt = SMB_CS_NONE;
 
 	if (smb_ctx_init(ctx, argc, argv, SMBL_SHARE, SMBL_SHARE, SMB_ST_DISK) != 0)
@@ -139,7 +148,7 @@ main(int argc, char *argv[])
 			    getpwuid(atoi(optarg)) : getpwnam(optarg);
 			if (pwd == NULL)
 				errx(EX_NOUSER, "unknown user '%s'", optarg);
-			mdata.uid = pwd->pw_uid;
+			uid = pwd->pw_uid;
 			break;
 		    }
 		    case 'g': {
@@ -149,18 +158,18 @@ main(int argc, char *argv[])
 			    getgrgid(atoi(optarg)) : getgrnam(optarg);
 			if (grp == NULL)
 				errx(EX_NOUSER, "unknown group '%s'", optarg);
-			mdata.gid = grp->gr_gid;
+			gid = grp->gr_gid;
 			break;
 		    }
 		    case 'd':
 			errno = 0;
-			mdata.dir_mode = strtol(optarg, &next, 8);
+			dir_mode = strtol(optarg, &next, 8);
 			if (errno || *next != 0)
 				errx(EX_DATAERR, "invalid value for directory mode");
 			break;
 		    case 'f':
 			errno = 0;
-			mdata.file_mode = strtol(optarg, &next, 8);
+			file_mode = strtol(optarg, &next, 8);
 			if (errno || *next != 0)
 				errx(EX_DATAERR, "invalid value for file mode");
 			break;
@@ -172,15 +181,25 @@ main(int argc, char *argv[])
 
 			nsp = inp = optarg;
 			while ((nsp = strsep(&inp, ",;:")) != NULL) {
-				if (strcasecmp(nsp, "LONG") == 0)
-					mdata.flags |= SMBFS_MOUNT_NO_LONG;
-				else
-					errx(EX_DATAERR, "unknown suboption '%s'", nsp);
+				if (strcasecmp(nsp, "LONG") == 0) {
+					build_iovec(&iov, &iovlen,
+					    "nolong", NULL, 0);
+				} else {
+					errx(EX_DATAERR,
+					    "unknown suboption '%s'", nsp);
+				}
 			}
 			break;
 		    };
 		    case 'o':
 			getmntopts(optarg, mopts, &mntflags, 0);
+			p = strchr(optarg, '=');
+			val = NULL;
+			if (p != NULL) {
+				*p = '\0';
+				val = p + 1;
+			}
+			build_iovec(&iov, &iovlen, optarg, val, (size_t)-1);
 			break;
 		    case 'c':
 			switch (optarg[0]) {
@@ -217,31 +236,31 @@ main(int argc, char *argv[])
 	if (smb_getextattr(mount_point, &einfo) == 0)
 		errx(EX_OSERR, "can't mount on %s twice", mount_point);
 */
-	if (mdata.uid == (uid_t)-1)
-		mdata.uid = st.st_uid;
-	if (mdata.gid == (gid_t)-1)
-		mdata.gid = st.st_gid;
-	if (mdata.file_mode == 0 )
-		mdata.file_mode = st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO);
-	if (mdata.dir_mode == 0) {
-		mdata.dir_mode = mdata.file_mode;
-		if (mdata.dir_mode & S_IRUSR)
-			mdata.dir_mode |= S_IXUSR;
-		if (mdata.dir_mode & S_IRGRP)
-			mdata.dir_mode |= S_IXGRP;
-		if (mdata.dir_mode & S_IROTH)
-			mdata.dir_mode |= S_IXOTH;
+	if (uid == (uid_t)-1)
+		uid = st.st_uid;
+	if (gid == (gid_t)-1)
+		gid = st.st_gid;
+	if (file_mode == 0 )
+		file_mode = st.st_mode & (S_IRWXU | S_IRWXG | S_IRWXO);
+	if (dir_mode == 0) {
+		dir_mode = file_mode;
+		if (dir_mode & S_IRUSR)
+			dir_mode |= S_IXUSR;
+		if (dir_mode & S_IRGRP)
+			dir_mode |= S_IXGRP;
+		if (dir_mode & S_IROTH)
+			dir_mode |= S_IXOTH;
 	}
 	/*
 	 * For now, let connection be private for this mount
 	 */
 	ctx->ct_ssn.ioc_opt |= SMBVOPT_PRIVATE;
 	ctx->ct_ssn.ioc_owner = ctx->ct_sh.ioc_owner = 0; /* root */
-	ctx->ct_ssn.ioc_group = ctx->ct_sh.ioc_group = mdata.gid;
+	ctx->ct_ssn.ioc_group = ctx->ct_sh.ioc_group = gid;
 	opt = 0;
-	if (mdata.dir_mode & S_IXGRP)
+	if (dir_mode & S_IXGRP)
 		opt |= SMBM_EXECGRP;
-	if (mdata.dir_mode & S_IXOTH)
+	if (dir_mode & S_IXOTH)
 		opt |= SMBM_EXECOTH;
 	ctx->ct_ssn.ioc_rights |= opt;
 	ctx->ct_sh.ioc_rights |= opt;
@@ -252,14 +271,24 @@ main(int argc, char *argv[])
 	if (error) {
 		exit(1);
 	}
-	strcpy(mdata.mount_point,mount_point);
-	mdata.version = SMBFS_VERSION;
-	mdata.dev = ctx->ct_fd;
-	mdata.caseopt = caseopt;
-	error = mount(SMBFS_VFSNAME, mdata.mount_point, mntflags, (void*)&mdata);
+
+	fd = ctx->ct_fd;
+
+	build_iovec(&iov, &iovlen, "fstype", strdup("smbfs"), -1);
+	build_iovec(&iov, &iovlen, "fspath", mount_point, -1);
+	build_iovec_argf(&iov, &iovlen, "fd", "%d", fd);
+	build_iovec(&iov, &iovlen, "mountpoint", mount_point, -1);
+	build_iovec_argf(&iov, &iovlen, "uid", "%d", uid);
+	build_iovec_argf(&iov, &iovlen, "gid", "%d", gid);
+	build_iovec_argf(&iov, &iovlen, "file_mode", "%d", file_mode);
+	build_iovec_argf(&iov, &iovlen, "dir_mode", "%d", dir_mode);
+	build_iovec_argf(&iov, &iovlen, "caseopt", "%d", caseopt);
+	build_iovec(&iov, &iovlen, "errmsg", errmsg, sizeof errmsg); 
+
+	error = nmount(iov, iovlen, mntflags);
 	smb_ctx_done(ctx);
 	if (error) {
-		smb_error("mount error: %s", error, mdata.mount_point);
+		smb_error("mount error: %s %s", error, mount_point, errmsg);
 		exit(1);
 	}
 	return 0;
@@ -272,7 +301,7 @@ usage(void)
 	"usage: mount_smbfs [-E cs1:cs2] [-I host] [-L locale] [-M crights:srights]",
 	"                   [-N] [-O cowner:cgroup/sowner:sgroup] [-R retrycount]",
 	"                   [-T timeout] [-W workgroup] [-c case] [-d mode] [-f mode]",
-	"                   [-g gid] [-n opt] [-u uid] //user@server/share node");
+	"                   [-g gid] [-n opt] [-u uid] [-U username] //user@server/share node");
 
 	exit (1);
 }
