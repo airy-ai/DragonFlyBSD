@@ -595,8 +595,7 @@ smb_ctx_resolve(struct smb_ctx *ctx)
 static int
 smb_ctx_gethandle(struct smb_ctx *ctx)
 {
-	int fd, i;
-	char buf[20];
+	int fd;
 
 	fd = open("/dev/"NSMB_NAME, O_RDWR);
 	if (fd >= 0) {
