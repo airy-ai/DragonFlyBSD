@@ -831,7 +831,7 @@ struct	ovfsconf *getvfsbyname (const char *);
 struct	ovfsconf *getvfsbytype (int);
 struct	ovfsconf *getvfsent (void);
 #define	getvfsbyname	new_getvfsbyname
-int	new_getvfsbyname (const char *, struct vfsconf *);
+int	new_getvfsbyname (const char *, struct xvfsconf *);
 void	setvfsent (int);
 int	vfsisloadable (const char *);
 int	vfsload (const char *);
