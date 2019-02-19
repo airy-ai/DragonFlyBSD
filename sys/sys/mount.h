@@ -463,7 +463,7 @@ struct nfs_public {
  * Filesystem configuration information. One of these exists for each
  * type of filesystem supported by the kernel. These are searched at
  * mount time to identify the requested filesystem.
- */
+l */
 struct vfsconf {
 	struct	vfsops *vfc_vfsops;	/* filesystem operations vector */
 	char	vfc_name[MFSNAMELEN];	/* filesystem type name */
@@ -471,6 +471,16 @@ struct vfsconf {
 	int	vfc_refcount;		/* number mounted of this type */
 	int	vfc_flags;		/* permanent flags */
 	STAILQ_ENTRY(vfsconf) vfc_next;	/* next in list */
+};
+
+/* Userland version of the struct vfsconf. */
+struct xvfsconf {
+        struct	vfsops *vfc_vfsops;	/* filesystem operations vector */
+        char	vfc_name[MFSNAMELEN];	/* filesystem type name */
+        int	vfc_typenum;		/* historic filesystem type number */
+        int	vfc_refcount;		/* number mounted of this type */
+        int	vfc_flags;		/* permanent flags */
+        struct	vfsconf *vfc_next;	/* next in list */
 };
 
 struct ovfsconf {
