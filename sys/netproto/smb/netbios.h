@@ -42,6 +42,8 @@
 #include <netinet/in.h>
 #endif
 
+#define	NMB_TCP_PORT	137
+
 #define	NBPROTO_TCPSSN	1		/* NETBIOS session over TCP */
 
 #define NB_NAMELEN	16
@@ -89,7 +91,7 @@
 #define	NBNS_NMFLAG_BCAST	0x01
 #define	NBNS_NMFLAG_RA		0x08	/* recursion available */
 #define	NBNS_NMFLAG_RD		0x10	/* recursion desired */
-#define	NBNS_NMFLAG_TC		0x20	/* truncation occured */
+#define	NBNS_NMFLAG_TC		0x20	/* truncation occurred */
 #define	NBNS_NMFLAG_AA		0x40	/* authoritative answer */
 
 /* 
